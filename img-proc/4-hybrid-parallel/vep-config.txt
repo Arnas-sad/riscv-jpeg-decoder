@@ -1,0 +1,40 @@
+##
+## JPEG HYBRID-PARALLEL decoder (2d) - function-split pipeline + data-split IDCT.
+##
+##   tile 0 : VLD+IQZZ source (p1, ALONE - private DMA-in region)
+##   tile 1 : IDCT-A (p1) + IDCT-B (p2) - the DATA-PARALLEL worker pair,
+##            round-robin over MCUs; also the multi-partitions-per-tile
+##            requirement for this version. No DMA regions here (sibling rule).
+##   tile 2 : CC+raster sink (p2, ALONE - private DMA-out region)
+##
+## PLATFORM CONSTRAINT (see 2c): DMA actors must be alone on their tile, so the
+## pipeline is shortened to 3 stages (VLD+IQZZ and CC+raster merged) to free
+## tile 1 for the worker pair. FIFOs (depth 4 - vs 2c's depth 2) live in the
+## vep-wide shared memory.
+##
+## memory: system takes the first 32 KiB of each tile; a partition's start
+## offset must be a MULTIPLE of its size.
+##
+on tile 0 partition 1 has 8KiB stack in 64KiB memory starting at 64KiB
+on tile 1 partition 1 has 4KiB stack in 32KiB memory starting at 32KiB
+on tile 1 partition 2 has 4KiB stack in 32KiB memory starting at 64KiB
+on tile 2 partition 2 has 8KiB stack in 32KiB memory starting at 64KiB
+##
+## private DMA staging regions (1 KiB-aligned buffers), DMA endpoints only
+##
+on tile 0 partition 1 shares 3KiB private memory
+on tile 2 partition 2 shares 3KiB private memory
+##
+## pipeline FIFOs in the vep-wide shared memory; ~29.3 KiB used of 32 KiB.
+## Top 32 KiB (96..128 KiB) is the known-good placement.
+##
+in shared memory memshared0 shares 32KiB private memory starting at 96KiB
+##
+## schedule. All slot tables are 67000 cycles; system 0-4999, slots separated
+## by 2000-cycle VKERNEL slots. Tile 1 splits evenly between the two IDCT
+## workers (5000 + 2000 + 28000 + 2000 + 28000 + 2000 = 67000).
+##
+on tile 0 partition 1 has 58000 cycles of 67000 starting at  7000
+on tile 1 partition 1 has 28000 cycles of 67000 starting at  7000
+on tile 1 partition 2 has 28000 cycles of 67000 starting at 37000
+on tile 2 partition 2 has 58000 cycles of 67000 starting at  7000

@@ -1,0 +1,18 @@
+##
+## JPEG sequential decoder - single RISC-V partition (tile 0 partition 1)
+## - one partition gets the full 64 KiB; decoder code+tables ~37 KiB, rest is stack + DMA buffers
+## - large stack: the decoder has deep call frames and big stack temporaries
+##
+on tile 0 partition 1 has 8KiB stack in 64KiB memory starting at 64KiB
+##
+## shared memory allocation for this vep
+## - 3 KiB private region = three 1 KiB-aligned DMA staging buffers
+##   (dma_scratch for TOC, input_block for windowed JPEG read, tile_buf for MCU output)
+## - region base is 1 KiB-aligned, so each 1 KiB sub-buffer is a valid DMA endpoint
+##
+on tile 0 partition 1 shares 3KiB private memory
+##
+## schedule: single partition, large slot. revolution = 5000 (sys) + 2*2000 (VKERNEL) + slot.
+## give the decoder a big slot so each TDM revolution does substantial work.
+##
+on tile 0 partition 1 has 58000 cycles of 67000 starting at 7000

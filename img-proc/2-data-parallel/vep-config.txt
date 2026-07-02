@@ -1,0 +1,36 @@
+##
+## JPEG DATA-PARALLEL decoder (2b) - one RISC-V partition per tile (tiles 0,1,2).
+## - each tile runs the same decoder binary and owns a round-robin slice of MCUs
+## - each partition gets the full 64 KiB; decoder code+tables ~37 KiB, rest is
+##   stack + DMA buffers
+## - large stack: the decoder has deep call frames and big stack temporaries
+##
+on tile 0 partition 1 has 8KiB stack in 64KiB memory starting at 64KiB
+on tile 1 partition 1 has 8KiB stack in 64KiB memory starting at 64KiB
+on tile 2 partition 1 has 8KiB stack in 64KiB memory starting at 64KiB
+##
+## shared memory allocation for this vep
+## - each tile gets a 3 KiB private region = three 1 KiB-aligned DMA staging
+##   buffers (dma_scratch for TOC, input_block for the windowed JPEG read,
+##   tile_buf for MCU output)
+## - region base is 1 KiB-aligned, so each 1 KiB sub-buffer is a valid DMA endpoint
+##
+on tile 0 partition 1 shares 3KiB private memory
+on tile 1 partition 1 shares 3KiB private memory
+on tile 2 partition 1 shares 3KiB private memory
+##
+## done-barrier for the gather pass: a 1 KiB memshared0 region holding done[3].
+## Each tile sets its flag after flushing its scratch tiles; tile 0 waits for all
+## three, then it alone composes the framebuffer (fb_gather) and zeroes the TOC
+## done-word. memshared0 is visible to every tile over the memory ring and is
+## zeroed at load.
+##
+in shared memory memshared0 shares 1KiB private memory starting at 77KiB
+##
+## schedule: one large slot per tile. revolution = 5000 (sys) + 2*2000 (VKERNEL)
+## + slot = 67000. Give each decoder a big slot so each TDM revolution does
+## substantial work.
+##
+on tile 0 partition 1 has 58000 cycles of 67000 starting at 7000
+on tile 1 partition 1 has 58000 cycles of 67000 starting at 7000
+on tile 2 partition 1 has 58000 cycles of 67000 starting at 7000
