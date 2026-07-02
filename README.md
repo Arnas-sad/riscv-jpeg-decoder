@@ -5,8 +5,6 @@ to write a JPEG image decoder and run it on the CompSOC platform, which has thre
 wrote the decoder once in a simple sequential way, and then in three parallel ways to make it faster
 or to be able to analyse its timing.
 
-It was a group project, so this is my copy of the code. My part is described at the bottom.
-
 ## The platform
 
 CompSOC is not a normal computer. The points that affected how we wrote the code:
@@ -62,9 +60,6 @@ Inside each version folder:
 
 Which version is best also depends on the image.
 
-## My part
+## Note
 
-This was a group project with three people. I mainly worked on the JPEG decoder, all four versions:
-writing them, making them faster, testing them on the board, and fixing the problems that stopped
-them from starting (the memory and DMA setup, and the final step that signals the image is done). I
-also helped with the FIFO library and the report.
+This was a university team project (three people). I did most of the decoder implementation.
