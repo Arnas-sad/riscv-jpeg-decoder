@@ -1,91 +1,70 @@
-# RISC-V JPEG Decoder on CompSOC
+# JPEG Decoder on CompSOC (RISC-V)
 
-A baseline-JPEG decoder implemented and parallelised on the **CompSOC** mixed-time-criticality
-platform, as part of the 5LIB0 Embedded Systems Laboratory (TU/e). The decoder is built once
-sequentially and then mapped onto three parallel architectures — **data-parallel**,
-**function-parallel**, and **hybrid** — with the function-parallel version modelled as a dataflow
-graph and analysed for a worst-case response time (WCRT).
+This is a university group project for the Embedded Systems Laboratory course (5LIB0). The goal was
+to write a JPEG image decoder and run it on the CompSOC platform, which has three RISC-V cores. We
+wrote the decoder once in a simple sequential way, and then in three parallel ways to make it faster
+or to be able to analyse its timing.
 
-> University group project (3 members). See [Contributors](#contributors) for my role.
+It was a group project, so this is my copy of the code. My part is described at the bottom.
 
-## Platform
+## The platform
 
-The target is a Xilinx Zynq board running CompSOC: **three RISC-V tiles at 40 MHz** plus an ARM core
-that uploads the JPEG and reads back the output. The properties that shaped every design decision:
+CompSOC is not a normal computer. The points that affected how we wrote the code:
 
-- **Bare-metal, time-division-multiplexed (TDM) tiles** — each tile runs a static slot table; a
-  partition that misses its slot waits a whole revolution.
-- **DRAM only via DMA** — a RISC-V tile cannot dereference DRAM directly; all traffic is
-  1 KiB-aligned blocks through a per-tile DMA queue.
-- **Tight local memory** — at most 64 KiB per partition.
-- **Shared memory** for inter-tile FIFOs; sequential consistency, so `volatile` accesses are enough
-  (no atomics or locks).
-- The framebuffer must be composed **on the RISC-V**, with completion signalled by zeroing the
-  first word of the DRAM table-of-contents.
+- There are three RISC-V cores (tiles) at 40 MHz, plus an ARM core that loads the image and reads
+  back the result.
+- Each core runs on a fixed time schedule. If a task misses its time slot, it waits for the next
+  round.
+- The cores cannot read the main memory (DRAM) directly. They copy data in and out in 1 KiB blocks
+  using DMA.
+- Each part of the program has at most 64 KiB of local memory.
+- Cores talk to each other through a shared memory area.
 
-## The decoder pipeline
+## How JPEG decoding works here
 
-`VLD -> IQZZ -> IDCT -> CC -> raster`, operating on Minimum Coded Units (MCUs). A key property for
-parallelisation: **VLD (entropy decoding) is inherently sequential** — variable-length codes and a
-DC predictor carried between blocks make random access into the bitstream impossible, so every
-parallel design has to work around it.
+A JPEG image is decoded in five steps: VLD, IQZZ, IDCT, CC, and raster. VLD reads the compressed
+data, and the other steps turn it into pixels. The important thing is that VLD has to be done in
+order and cannot be split up, which limits how much of the decoder can run in parallel.
 
-## Implementations (`img-proc/`)
+## What is in this repo
 
-| Version | Idea |
-|---|---|
-| `1-sequential` | Full pipeline on one partition. Measurement baseline. |
-| `2-data-parallel` | All three tiles run the full decoder, each on a disjoint slice of the image, then a gather pass composes the frame. Fastest overall. |
-| `3-function-parallel` | The pipeline stages are split across tiles/partitions and connected by FIFOs. Modelled as a dataflow (SDF) graph with self-edges for actor state and analysed for a conservative WCRT — the real-time version. |
-| `4-hybrid-parallel` | A mix of data- and function-parallelism: a pipelined front end with a data-split stage. |
+There are two parts: the FIFO library and the decoder.
 
-At least two versions use multiple partitions on one RISC-V tile, and the versions use different
-FIFO token types and depths.
+### libmyfifo
 
-## `libmyfifo/`
+A small FIFO (queue) library we wrote so that one core can send data to another. One side writes,
+the other side reads, and the data always arrives in the right order. The decoder versions that
+split work across cores use it to pass data between the steps.
 
-A single-producer / single-consumer circular-buffer FIFO library (C-HEAP-style API:
-`claim_space` / `release_token` / `claim_token` / `release_space`, plus lifecycle and status calls).
-It is the inter-core communication primitive used by the pipelined decoder versions. Tokens are
-always delivered correctly and in order under the platform's sequential-consistency model, with no
-locks.
+### img-proc
 
-## Repository layout
+The decoder, written in four versions. Each folder is one version.
 
-```
-img-proc/
-  1-sequential/        # single-partition baseline
-  2-data-parallel/     # 3 tiles, full decoder each, gather
-  3-function-parallel/ # dataflow pipeline + WCRT (real-time version)
-  4-hybrid-parallel/   # data + function parallel
-libmyfifo/             # SPSC FIFO library
-```
+- **1-sequential**: the simple version. Everything runs on one core, one step after another. This is
+  the baseline the others are compared against.
+- **2-data-parallel**: all three cores run the whole decoder, but each one only decodes part of the
+  image. This is the fastest version.
+- **3-function-parallel**: the five steps are split across the cores and connected with FIFOs, like a
+  pipeline. This is the version we analysed for worst-case timing.
+- **4-hybrid-parallel**: a mix of the two ideas above.
 
-Each `img-proc/<version>/` is a self-contained partition set (`partition_<tile>_<partition>/`,
-shared memory declarations, and a `vep-config.txt` describing memory and the TDM schedule).
+Inside each version folder:
 
-## Results (high level)
+- **partition_X_Y**: the code that runs on core X, part Y.
+- **shared_memories**: the description of the shared memory used to pass data between cores.
+- **vep-config.txt**: the memory sizes and the time schedule for that version.
 
-- **Data-parallel is the fastest** version, giving roughly a 2x speedup over sequential across the
-  benchmark images — bounded by the replicated, unavoidable VLD (an Amdahl-style limit).
-- **Function-parallel** is the analysable one: a conservative analytical WCRT holds for every
-  admissible input. "Real-time" here means a provable worst-case bound, not necessarily fast.
-- **Hybrid** trades redundant VLD work against inter-core communication volume.
+## Results, short version
 
-The best mapping is content-dependent: small per-MCU images reward fine-grained pipelining, while
-large per-MCU images punish the inter-tile copies.
+- Data-parallel is the fastest, about two times faster than the sequential version.
+- Function-parallel is the version where we could calculate a guaranteed worst-case time.
+- Hybrid sits in between.
 
-## Building / running
+Which version is best also depends on the image.
 
-This targets the CompSOC course platform and toolchain (RISC-V bare-metal + the ARM/Linux host
-scripts), so it is not a standalone desktop build. Each version is loaded as a VEP onto the RISC-V
-tiles; the ARM side uploads the JPEG into DRAM and reads back the decoded framebuffer as a BMP.
+## My part
 
-## Contributors
-
-This was a group project (three members). **My contributions:** I focused on the JPEG decoder
-across all four versions — implementing and optimising each mapping, tuning the TDM slot and
-partition/DMA-region layout, and benchmarking the versions over the image set to choose the final
-mappings. I resolved the platform bring-up problems that gated the decoders (conflicting DMA-private
-memory regions, the partition offset/alignment rules, and the RISC-V gather pass with the
-table-of-contents completion signal). I also contributed in part to `libmyfifo` and to the report.
+This was a group project with three people. I mainly worked on the JPEG decoder, all four versions:
+writing them, making them faster, testing them on the board, and fixing the problems that stopped
+them from starting (the memory and DMA setup, and the final step that signals the image is done). I
+also helped with the FIFO library and the report.
